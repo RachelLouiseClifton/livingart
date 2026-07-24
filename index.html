@@ -213,36 +213,95 @@
         ];
         var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
         if(reduce) return;
-        var slots = Array.prototype.slice.call(document.querySelectorAll('.gallery .mark.paint'));
-        if(!slots.length) return;
-        var assigned = [0,1,2,3];
+        var slotEls = Array.prototype.slice.call(document.querySelectorAll('.gallery .mark.paint'));
+        if(!slotEls.length) return;
 
-        function crossfade(slot, painting){
-          var layers = slot.querySelectorAll('img.layer');
-          var visible = slot.querySelector('img.layer.show');
-          var hidden = null;
-          for(var i=0;i<layers.length;i++){ if(layers[i]!==visible) hidden = layers[i]; }
-          if(!hidden) return;
-          var pre = new Image();
-          pre.onload = function(){
-            hidden.src = painting.src;
-            hidden.alt = painting.alt;
-            requestAnimationFrame(function(){
-              requestAnimationFrame(function(){
-                hidden.classList.add('show');
-                visible.classList.remove('show');
-              });
-            });
-          };
-          pre.src = painting.src;
+        // Per-slot state lives in JS, never derived from the DOM's .show class -
+        // that's what let concurrent/batched ticks corrupt which layer was which.
+        var state = slotEls.map(function(slot){
+          var layers = Array.prototype.slice.call(slot.querySelectorAll('img.layer'));
+          return { layers: layers, active: 0, busy: false, timeoutId: null };
+        });
+
+        function hardSet(st, painting){
+          // st.active is always committed synchronously by crossfade() the
+          // instant it's called (see below) - it never lags behind an
+          // in-flight fade waiting on something async. So the layer to force
+          // visible here is simply st.layers[st.active], with no separate
+          // "mid-transition" case to reason about.
+          var shown = st.layers[st.active];
+          var other = st.layers[1 - st.active];
+          other.classList.remove('show');
+          shown.src = painting.src;
+          shown.alt = painting.alt;
+          shown.classList.add('show');
+          if(st.timeoutId){ clearTimeout(st.timeoutId); st.timeoutId = null; }
+          st.busy = false;
         }
 
+        function crossfade(st, painting){
+          if(st.busy){ hardSet(st, painting); return; }
+          var nextIdx = 1 - st.active;
+          var showing = st.layers[st.active];
+          var incoming = st.layers[nextIdx];
+          // Assign the src and commit the new active index synchronously -
+          // deliberately not gated behind an async image preload. An async
+          // gap between "this slot's target decided" and "this slot's state
+          // committed" is exactly what let overlapping/out-of-order ticks
+          // corrupt which layer was which; these are same-origin local
+          // assets, so there's nothing to gain by waiting on a load event
+          // before committing state (the fade itself still waits a frame).
+          incoming.src = painting.src;
+          incoming.alt = painting.alt;
+          st.busy = true;
+          st.active = nextIdx;
+          // Toggle the classes in the same synchronous pass as the state
+          // commit above, not after a rAF delay - incoming was already
+          // sitting at opacity:0 from a previous paint, so the browser still
+          // animates the transition normally. Deferring the class swap by
+          // even one frame is a window where DOM (.show) and JS (st.active)
+          // briefly disagree, which is what let a poll catch a stale slot.
+          incoming.classList.add('show');
+          showing.classList.remove('show');
+          var done = false;
+          function finish(){
+            if(done) return;
+            done = true;
+            st.busy = false;
+            incoming.removeEventListener('transitionend', finish);
+            if(st.timeoutId){ clearTimeout(st.timeoutId); st.timeoutId = null; }
+          }
+          incoming.addEventListener('transitionend', finish);
+          st.timeoutId = setTimeout(finish, 1500);
+        }
+
+        var TICK_MS = 9000;
+        var STAGGER_MS = 350;
+        // The visual stagger is done with CSS transition-delay, not a JS
+        // setTimeout per slot. With paintings.length === slots.length, the
+        // "each slot shows paintings[(i+epoch)%N]" formula is a cyclic shift,
+        // which means a slot one epoch behind shows EXACTLY the same
+        // painting as the slot one index ahead of it. Staggering the JS
+        // update itself (even with supersede guards) inevitably leaves
+        // slots at different epochs relative to each other for part of
+        // every tick, and that's precisely the condition that collides.
+        // Committing every slot's state in the same synchronous pass keeps
+        // them permanently on one shared epoch - distinctness is then just
+        // the (i+epoch)%N formula being a permutation, no timing involved.
+        state.forEach(function(st, i){
+          var delay = (i * STAGGER_MS) + 'ms';
+          st.layers.forEach(function(layer){ layer.style.transitionDelay = delay; });
+        });
+
+        var epoch = 0; // pure counter - each slot's target painting is a function of this, never of prior DOM state
         setInterval(function(){
-          assigned.unshift(assigned.pop());
-          slots.forEach(function(slot, i){
-            setTimeout(function(){ crossfade(slot, paintings[assigned[i]]); }, i*350);
+          if(document.hidden) return;
+          epoch++;
+          state.forEach(function(st, i){
+            var target = paintings[(i + epoch) % paintings.length];
+            crossfade(st, target);
           });
-        }, 9000);
+        }, TICK_MS);
       })();
       </script>
     </div>
@@ -263,16 +322,42 @@
       <div class="pictures">
         <h2>pictures</h2>
         <div class="strip" id="picStrip">
-          <figure style="--rot:-1.1deg;width:70px"><img class="layer show" src="pictures/ig-001.jpg" alt=""><img class="layer" alt=""></figure>
-          <figure style="--rot:1.4deg;width:82px"><img class="layer show" src="pictures/ig-002.jpg" alt=""><img class="layer" alt=""></figure>
-          <figure style="--rot:-0.8deg;width:66px"><img class="layer show" src="pictures/ig-003.jpg" alt=""><img class="layer" alt=""></figure>
-          <figure style="--rot:1.1deg;width:78px"><img class="layer show" src="pictures/ig-004.jpg" alt=""><img class="layer" alt=""></figure>
-          <figure style="--rot:-1.3deg;width:68px"><img class="layer show" src="pictures/ig-005.jpg" alt=""><img class="layer" alt=""></figure>
-          <figure style="--rot:0.9deg;width:80px"><img class="layer show" src="pictures/ig-006.jpg" alt=""><img class="layer" alt=""></figure>
+          <figure style="--rot:-1.1deg;width:70px"><img class="layer show" src="pictures/ig-084.jpg" alt=""><img class="layer" alt=""></figure>
+          <figure style="--rot:1.4deg;width:82px"><img class="layer show" src="pictures/ig-085.jpg" alt=""><img class="layer" alt=""></figure>
+          <figure style="--rot:-0.8deg;width:66px"><img class="layer show" src="pictures/ig-086.jpg" alt=""><img class="layer" alt=""></figure>
+          <figure style="--rot:1.1deg;width:78px"><img class="layer show" src="pictures/ig-087.jpg" alt=""><img class="layer" alt=""></figure>
+          <figure style="--rot:-1.3deg;width:68px"><img class="layer show" src="pictures/ig-088.jpg" alt=""><img class="layer" alt=""></figure>
+          <figure style="--rot:0.9deg;width:80px"><img class="layer show" src="pictures/ig-089.jpg" alt=""><img class="layer" alt=""></figure>
         </div>
         <script>
         (function(){
-          var photos = ['pictures/ig-001.jpg','pictures/ig-002.jpg','pictures/ig-003.jpg','pictures/ig-004.jpg',
+          var photos = ['pictures/ig-084.jpg','pictures/ig-085.jpg','pictures/ig-086.jpg','pictures/ig-087.jpg',
+                         'pictures/ig-088.jpg','pictures/ig-089.jpg','pictures/ig-090.jpg','pictures/ig-091.jpg',
+                         'pictures/ig-092.jpg','pictures/ig-093.jpg','pictures/ig-094.jpg','pictures/ig-095.jpg',
+                         'pictures/ig-096.jpg','pictures/ig-097.jpg','pictures/ig-098.jpg','pictures/ig-099.jpg',
+                         'pictures/ig-100.jpg','pictures/ig-101.jpg','pictures/ig-102.jpg','pictures/ig-103.jpg',
+                         'pictures/ig-104.jpg','pictures/ig-105.jpg','pictures/ig-106.jpg','pictures/ig-107.jpg',
+                         'pictures/ig-108.jpg','pictures/ig-109.jpg','pictures/ig-110.jpg','pictures/ig-111.jpg',
+                         'pictures/ig-112.jpg','pictures/ig-113.jpg','pictures/ig-114.jpg','pictures/ig-115.jpg',
+                         'pictures/ig-116.jpg','pictures/ig-117.jpg','pictures/ig-118.jpg','pictures/ig-119.jpg',
+                         'pictures/ig-120.jpg','pictures/ig-121.jpg','pictures/ig-122.jpg','pictures/ig-123.jpg',
+                         'pictures/ig-124.jpg','pictures/ig-125.jpg','pictures/ig-126.jpg','pictures/ig-127.jpg',
+                         'pictures/ig-128.jpg','pictures/ig-129.jpg','pictures/ig-130.jpg','pictures/ig-131.jpg',
+                         'pictures/ig-132.jpg','pictures/ig-133.jpg','pictures/ig-134.jpg','pictures/ig-135.jpg',
+                         'pictures/ig-136.jpg','pictures/ig-137.jpg','pictures/ig-138.jpg','pictures/ig-139.jpg',
+                         'pictures/ig-140.jpg','pictures/ig-141.jpg','pictures/ig-142.jpg','pictures/ig-143.jpg',
+                         'pictures/ig-144.jpg','pictures/ig-145.jpg','pictures/ig-146.jpg','pictures/ig-147.jpg',
+                         'pictures/ig-148.jpg','pictures/ig-149.jpg','pictures/ig-150.jpg','pictures/ig-151.jpg',
+                         'pictures/ig-152.jpg','pictures/ig-153.jpg','pictures/ig-154.jpg','pictures/ig-155.jpg',
+                         'pictures/ig-156.jpg','pictures/ig-157.jpg','pictures/ig-158.jpg','pictures/ig-159.jpg',
+                         'pictures/ig-160.jpg','pictures/ig-161.jpg','pictures/ig-162.jpg','pictures/ig-163.jpg',
+                         'pictures/ig-164.jpg','pictures/ig-165.jpg','pictures/ig-166.jpg','pictures/ig-167.jpg',
+                         'pictures/ig-168.jpg','pictures/ig-169.jpg','pictures/ig-170.jpg','pictures/ig-171.jpg',
+                         'pictures/ig-172.jpg','pictures/ig-173.jpg','pictures/ig-174.jpg','pictures/ig-175.jpg',
+                         'pictures/ig-176.jpg','pictures/ig-177.jpg','pictures/ig-178.jpg','pictures/ig-179.jpg',
+                         'pictures/ig-180.jpg','pictures/ig-181.jpg','pictures/ig-182.jpg','pictures/ig-183.jpg',
+                         'pictures/ig-184.jpg','pictures/ig-185.jpg','pictures/ig-186.jpg','pictures/ig-187.jpg',
+                         'pictures/ig-001.jpg','pictures/ig-002.jpg','pictures/ig-003.jpg','pictures/ig-004.jpg',
                          'pictures/ig-005.jpg','pictures/ig-006.jpg','pictures/ig-007.jpg','pictures/ig-008.jpg',
                          'pictures/ig-009.jpg','pictures/ig-010.jpg','pictures/ig-011.jpg','pictures/ig-012.jpg',
                          'pictures/ig-013.jpg','pictures/ig-014.jpg','pictures/ig-015.jpg','pictures/ig-016.jpg',
@@ -292,67 +377,76 @@
                          'pictures/ig-069.jpg','pictures/ig-070.jpg','pictures/ig-071.jpg','pictures/ig-072.jpg',
                          'pictures/ig-073.jpg','pictures/ig-074.jpg','pictures/ig-075.jpg','pictures/ig-076.jpg',
                          'pictures/ig-077.jpg','pictures/ig-078.jpg','pictures/ig-079.jpg','pictures/ig-080.jpg',
-                         'pictures/ig-081.jpg','pictures/ig-082.jpg','pictures/ig-083.jpg','pictures/ig-084.jpg',
-                         'pictures/ig-085.jpg','pictures/ig-086.jpg','pictures/ig-087.jpg','pictures/ig-088.jpg',
-                         'pictures/ig-089.jpg','pictures/ig-090.jpg','pictures/ig-091.jpg','pictures/ig-092.jpg',
-                         'pictures/ig-093.jpg','pictures/ig-094.jpg','pictures/ig-095.jpg','pictures/ig-096.jpg',
-                         'pictures/ig-097.jpg','pictures/ig-098.jpg','pictures/ig-099.jpg','pictures/ig-100.jpg',
-                         'pictures/ig-101.jpg','pictures/ig-102.jpg','pictures/ig-103.jpg','pictures/ig-104.jpg',
-                         'pictures/ig-105.jpg','pictures/ig-106.jpg','pictures/ig-107.jpg','pictures/ig-108.jpg',
-                         'pictures/ig-109.jpg','pictures/ig-110.jpg','pictures/ig-111.jpg','pictures/ig-112.jpg',
-                         'pictures/ig-113.jpg','pictures/ig-114.jpg','pictures/ig-115.jpg','pictures/ig-116.jpg',
-                         'pictures/ig-117.jpg','pictures/ig-118.jpg','pictures/ig-119.jpg','pictures/ig-120.jpg',
-                         'pictures/ig-121.jpg','pictures/ig-122.jpg','pictures/ig-123.jpg','pictures/ig-124.jpg',
-                         'pictures/ig-125.jpg','pictures/ig-126.jpg','pictures/ig-127.jpg','pictures/ig-128.jpg',
-                         'pictures/ig-129.jpg','pictures/ig-130.jpg','pictures/ig-131.jpg','pictures/ig-132.jpg',
-                         'pictures/ig-133.jpg','pictures/ig-134.jpg','pictures/ig-135.jpg','pictures/ig-136.jpg',
-                         'pictures/ig-137.jpg','pictures/ig-138.jpg','pictures/ig-139.jpg','pictures/ig-140.jpg',
-                         'pictures/ig-141.jpg','pictures/ig-142.jpg','pictures/ig-143.jpg','pictures/ig-144.jpg',
-                         'pictures/ig-145.jpg','pictures/ig-146.jpg','pictures/ig-147.jpg','pictures/ig-148.jpg',
-                         'pictures/ig-149.jpg','pictures/ig-150.jpg','pictures/ig-151.jpg','pictures/ig-152.jpg',
-                         'pictures/ig-153.jpg','pictures/ig-154.jpg','pictures/ig-155.jpg','pictures/ig-156.jpg',
-                         'pictures/ig-157.jpg','pictures/ig-158.jpg','pictures/ig-159.jpg','pictures/ig-160.jpg',
-                         'pictures/ig-161.jpg','pictures/ig-162.jpg','pictures/ig-163.jpg','pictures/ig-164.jpg',
-                         'pictures/ig-165.jpg','pictures/ig-166.jpg','pictures/ig-167.jpg','pictures/ig-168.jpg',
-                         'pictures/ig-169.jpg','pictures/ig-170.jpg','pictures/ig-171.jpg','pictures/ig-172.jpg',
-                         'pictures/ig-173.jpg','pictures/ig-174.jpg','pictures/ig-175.jpg','pictures/ig-176.jpg',
-                         'pictures/ig-177.jpg','pictures/ig-178.jpg','pictures/ig-179.jpg','pictures/ig-180.jpg',
-                         'pictures/ig-181.jpg','pictures/ig-182.jpg','pictures/ig-183.jpg','pictures/ig-184.jpg',
-                         'pictures/ig-185.jpg','pictures/ig-186.jpg','pictures/ig-187.jpg'];
+                         'pictures/ig-081.jpg','pictures/ig-082.jpg','pictures/ig-083.jpg'];
           var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
           if(reduce) return;
           var strip = document.getElementById('picStrip');
           if(!strip) return;
-          var slots = Array.prototype.slice.call(strip.querySelectorAll('figure'));
-          if(!slots.length) return;
-          var slotPtr = 0;
-          var poolPtr = slots.length; // next unseated photo (indices 6..10 first)
+          var slotEls = Array.prototype.slice.call(strip.querySelectorAll('figure'));
+          if(!slotEls.length) return;
+          var n = slotEls.length;
 
-          function crossfade(slot, src){
-            var layers = slot.querySelectorAll('img.layer');
-            var visible = slot.querySelector('img.layer.show');
-            var hidden = null;
-            for(var i=0;i<layers.length;i++){ if(layers[i]!==visible) hidden = layers[i]; }
-            if(!hidden) return;
-            var pre = new Image();
-            pre.onload = function(){
-              hidden.src = src;
-              requestAnimationFrame(function(){
-                requestAnimationFrame(function(){
-                  hidden.classList.add('show');
-                  visible.classList.remove('show');
-                });
-              });
-            };
-            pre.src = src;
+          // Per-slot state lives in JS, never derived from the DOM's .show class -
+          // that's what let concurrent/batched ticks corrupt which layer was which.
+          var state = slotEls.map(function(slot){
+            var layers = Array.prototype.slice.call(slot.querySelectorAll('img.layer'));
+            return { layers: layers, active: 0, busy: false, timeoutId: null };
+          });
+
+          function hardSet(st, src){
+            // st.active is always committed synchronously by crossfade() the
+            // instant it's called - it never lags behind an in-flight fade
+            // waiting on something async, so this is simply "force the
+            // current active layer to this src, no fade".
+            var shown = st.layers[st.active];
+            var other = st.layers[1 - st.active];
+            other.classList.remove('show');
+            shown.src = src;
+            shown.classList.add('show');
+            if(st.timeoutId){ clearTimeout(st.timeoutId); st.timeoutId = null; }
+            st.busy = false;
           }
 
+          function crossfade(st, src){
+            if(st.busy){ hardSet(st, src); return; }
+            var nextIdx = 1 - st.active;
+            var showing = st.layers[st.active];
+            var incoming = st.layers[nextIdx];
+            // Assign src and commit the new active index synchronously - not
+            // gated behind an async image preload. These are same-origin
+            // local assets; an async gap between "target decided" and
+            // "state committed" is exactly what let overlapping/out-of-order
+            // ticks corrupt which layer was which.
+            incoming.src = src;
+            st.busy = true;
+            st.active = nextIdx;
+            // Toggle classes synchronously with the state commit above - see
+            // the paintings wall's crossfade() for why the rAF delay was
+            // removed (it left a window where DOM and JS state disagreed).
+            incoming.classList.add('show');
+            showing.classList.remove('show');
+            var done = false;
+            function finish(){
+              if(done) return;
+              done = true;
+              st.busy = false;
+              incoming.removeEventListener('transitionend', finish);
+              if(st.timeoutId){ clearTimeout(st.timeoutId); st.timeoutId = null; }
+            }
+            incoming.addEventListener('transitionend', finish);
+            st.timeoutId = setTimeout(finish, 1500);
+          }
+
+          // epoch is a pure tick counter; slot and photo targets are derived from it,
+          // never from prior DOM state. poolPtr starts at n so the first n photos
+          // already seated in the markup aren't immediately re-shown.
+          var epoch = 0;
           function tick(){
-            var slot = slots[slotPtr % slots.length];
-            var src = photos[poolPtr % photos.length];
-            crossfade(slot, src);
-            slotPtr++;
-            poolPtr++;
+            if(document.hidden) return;
+            var i = epoch % n;
+            var src = photos[(n + epoch) % photos.length];
+            crossfade(state[i], src);
+            epoch++;
           }
           // offset start so ticks never coincide with the paintings wall's 9s cycle
           setTimeout(function(){ setInterval(tick, 7000); }, 3500);
@@ -417,10 +511,30 @@
       const start=Math.max(0,idx-60),end=Math.min(text.length,idx+160);
       return (start>0?'\u2026':'')+text.slice(start,end).trim()+(end<text.length?'\u2026':'');
     }
+    // Exact-substring search misses obvious variants ("masculinity" vs the
+    // 13 "masculine" hits already in wiki.json). For any word >=6 chars that
+    // gets zero hits as typed, trim trailing characters down to a 5-char
+    // stem and re-check after each trim, stopping at the first (longest)
+    // stem that actually matches something - so "masculinity" falls back to
+    // "masculin" and finds the "masculine" sections instead of showing empty.
+    function hasHit(term){
+      for(const sec of sections){
+        if(((sec.h||'')+' '+sec.t).toLowerCase().includes(term))return true;
+      }
+      return false;
+    }
+    function resolveTerm(w){
+      if(w.length<6||hasHit(w))return w;
+      for(let len=w.length-1;len>=5;len--){
+        const stem=w.slice(0,len);
+        if(hasHit(stem))return stem;
+      }
+      return w;
+    }
     function run(){
       const s=q.value.trim().toLowerCase();res.innerHTML='';
       if(!s||!sections)return;
-      const terms=s.split(/\s+/).filter(Boolean);let n=0;
+      const terms=s.split(/\s+/).filter(Boolean).map(resolveTerm);let n=0;
       for(const sec of sections){
         const hay=((sec.h||'')+' '+sec.t).toLowerCase();
         if(terms.every(w=>hay.includes(w))){
