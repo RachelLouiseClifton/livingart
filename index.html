@@ -320,7 +320,7 @@
         </div>
       </div>
       <div class="pictures">
-        <h2>pictures</h2>
+        <h2>pictures I've taken</h2>
         <div class="strip" id="picStrip">
           <figure style="--rot:-1.1deg;width:70px"><img class="layer show" src="pictures/ig-084.jpg" alt=""><img class="layer" alt=""></figure>
           <figure style="--rot:1.4deg;width:82px"><img class="layer show" src="pictures/ig-085.jpg" alt=""><img class="layer" alt=""></figure>
@@ -562,9 +562,20 @@
       const v=t.value.trim();
       const who=document.getElementById('msgwho').value.trim();
       if(!v||!who)return;
-      location.href='mailto:rachelclif@gmail.com?subject='+encodeURIComponent('from livingart.work')+'&body='+encodeURIComponent(v+'\n\n\u2014 '+who);
-      t.value='';document.getElementById('msgwho').value='';s.style.display='block';setTimeout(()=>s.style.display='none',6000);
-      t.value='';s.style.display='block';setTimeout(()=>s.style.display='none',6000);
+      b.disabled=true;
+      fetch('https://theconfessionproject.com/api/message',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({message:v,sender:who})
+      }).then(r=>{
+        if(!r.ok)throw new Error('send failed');
+        t.value='';document.getElementById('msgwho').value='';
+        s.textContent='sent. thank you.';
+        s.style.display='block';setTimeout(()=>s.style.display='none',6000);
+      }).catch(()=>{
+        s.textContent="that didn't go through \u2014 try again, or find me at @rachelclif";
+        s.style.display='block';setTimeout(()=>s.style.display='none',6000);
+      }).finally(()=>{b.disabled=false;});
     });
   })();
 </script>
